@@ -1800,15 +1800,13 @@ export default function (Sequelize, DataTypes) {
       throw new Error('This host is not open to applications');
     }
 
+    const platformFeePercent = this.tags?.includes('covid-19') ? undefined : hostCollective.platformFeePercent;
     const updatedValues = {
       HostCollectiveId: hostCollective.id,
       hostFeePercent: hostCollective.hostFeePercent,
+      platformFeePercent,
       ...(shouldAutomaticallyApprove ? { isActive: true, approvedAt: new Date() } : null),
     };
-
-    if (hostCollective.platformFeePercent !== null) {
-      updatedValues.platformFeePercent = hostCollective.platformFeePercent;
-    }
 
     // events should take the currency of their parent collective, not necessarily the host of their host.
     if (this.type === 'COLLECTIVE') {
