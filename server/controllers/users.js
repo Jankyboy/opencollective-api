@@ -80,10 +80,12 @@ export const signin = (req, res, next) => {
  * the 2FA flow on the frontend
  */
 export const updateToken = async (req, res) => {
+  console.log('update token');
   if (req.remoteUser.twoFactorAuthToken !== null) {
     const token = req.remoteUser.jwt({ scope: 'twofactorauth' }, auth.TOKEN_EXPIRATION_SESSION);
     res.send({ token });
   } else {
+    console.log('seding token');
     const token = req.remoteUser.jwt({}, auth.TOKEN_EXPIRATION_SESSION);
     res.send({ token });
   }

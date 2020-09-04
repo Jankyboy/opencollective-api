@@ -85,6 +85,7 @@ export const checkJwtExpiry = (req, res, next) => {
  *  - req.remoteUser.memberships[CollectiveId] = [roles]
  */
 export const _authenticateUserByJwt = async (req, res, next) => {
+  console.log('_authenticateUserByJwt');
   if (!req.jwtPayload) {
     next();
     return;
@@ -98,20 +99,32 @@ export const _authenticateUserByJwt = async (req, res, next) => {
     return;
   }
 
+  console.log('user', user.id, user.twoFactorAuthToken);
+
   /**
    * Functionality for one-time login links. We check that the lastLoginAt
    * in the JWT matches the lastLoginAt in the db. If so, we allow the user
    * to log in, and update the lastLoginAt.
    */
   if (req.jwtPayload.scope === 'login') {
+    const path = req.path;
+
+    console.log('path', path);
+
+    if (path !== '/users/update-token') {
+      console.log('denied!!!!');
+      next();
+      return;
+    }
     if (user.lastLoginAt) {
       if (!req.jwtPayload.lastLoginAt || user.lastLoginAt.getTime() !== req.jwtPayload.lastLoginAt) {
-        if (config.env === 'production') {
-          logger.error('This login link is expired or has already been used');
-          return next(errors.Unauthorized('This login link is expired or has already been used'));
-        } else {
-          logger.info('This login link is expired or has already been used. Ignoring in non-production environment.');
-        }
+        // if (config.env === 'production') {
+        //   logger.error('This login link is expired or has already been used');
+        //   return next(errors.Unauthorized('This login link is expired or has already been used'));
+        // } else {
+        //   logger.info('This login link is expired or has already been used. Ignoring in non-production environment.');
+        // }
+        return next(errors.Unauthorized('This login link is expired or has already been used'));
       }
     }
     await user.update({
@@ -125,6 +138,8 @@ export const _authenticateUserByJwt = async (req, res, next) => {
 
   req.remoteUser = user;
 
+  console.log('remote user populated', req.remoteUser.id);
+
   debug('logged in user', req.remoteUser.id, 'roles:', req.remoteUser.rolesByCollectiveId);
   next();
 };
@@ -137,11 +152,13 @@ export const _authenticateUserByJwt = async (req, res, next) => {
  * @ERROR: Will return an error if a JWT token is provided and invalid
  */
 export function authenticateUser(req, res, next) {
+  console.log('authenticateUser');
   if (req.remoteUser && req.remoteUser.id) {
     return next();
   }
 
   parseJwtNoExpiryCheck(req, res, e => {
+    console.log('parse jwt');
     // If a token was submitted but is invalid, we continue without authenticating the user
     if (e) {
       debug('>>> checkJwtExpiry invalid error', e);
@@ -149,6 +166,7 @@ export function authenticateUser(req, res, next) {
     }
 
     checkJwtExpiry(req, res, e => {
+      console.log('chck jwt expiry');
       // If a token was submitted and is expired, we continue without authenticating the user
       if (e) {
         debug('>>> checkJwtExpiry expiry error', e);
