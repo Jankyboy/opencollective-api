@@ -1177,6 +1177,17 @@ export default function (Sequelize, DataTypes) {
     });
   };
 
+  Collective.prototype.getProjects = function (query = {}) {
+    return Collective.findAll({
+      ...query,
+      where: {
+        ...query.where,
+        ParentCollectiveId: this.id,
+        type: types.PROJECT,
+      },
+    });
+  };
+
   /**
    * Return stats about backers based on the Members table
    *  - stats.backers.lastMonth: number of backers by endDate
@@ -1907,10 +1918,14 @@ export default function (Sequelize, DataTypes) {
 
     await Promise.all(promises);
 
-    // Cascade host update to events
+    // Cascade host update to events and projects
     const events = await this.getEvents();
     if (events?.length > 0) {
       await Promise.all(events.map(e => e.addHost(hostCollective, creatorUser)));
+    }
+    const projects = await this.getProjects();
+    if (projects?.length > 0) {
+      await Promise.all(projects.map(e => e.addHost(hostCollective, creatorUser)));
     }
 
     return this;
