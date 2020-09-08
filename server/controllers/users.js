@@ -9,6 +9,7 @@ import { isValidEmail } from '../lib/utils';
 import models from '../models';
 
 const { Unauthorized } = errors;
+const { User } = models;
 
 /**
  *
@@ -80,12 +81,10 @@ export const signin = (req, res, next) => {
  * the 2FA flow on the frontend
  */
 export const updateToken = async (req, res) => {
-  console.log('update token');
   if (req.remoteUser.twoFactorAuthToken !== null) {
     const token = req.remoteUser.jwt({ scope: 'twofactorauth' }, auth.TOKEN_EXPIRATION_SESSION);
     res.send({ token });
   } else {
-    console.log('seding token');
     const token = req.remoteUser.jwt({}, auth.TOKEN_EXPIRATION_SESSION);
     res.send({ token });
   }
@@ -98,10 +97,18 @@ export const updateToken = async (req, res) => {
 export const twoFactorAuthAndUpdateToken = async (req, res, next) => {
   const { twoFactorAuthenticatorCode } = req.body;
 
-  const token = req.remoteUser.jwt({}, auth.TOKEN_EXPIRATION_SESSION);
+  const userId = Number(req.jwtPayload.sub);
+  const user = await User.findByPk(userId);
+  if (!user) {
+    logger.warn(`User id ${userId} not found`);
+    next();
+    return;
+  }
+
+  const token = user.jwt({}, auth.TOKEN_EXPIRATION_SESSION);
 
   // we need to verify the 2FA code before returning the token
-  const verified = auth.verifyTwoFactorAuthenticatorCode(req.remoteUser.twoFactorAuthToken, twoFactorAuthenticatorCode);
+  const verified = auth.verifyTwoFactorAuthenticatorCode(user.twoFactorAuthToken, twoFactorAuthenticatorCode);
   if (!verified) {
     return next(new Unauthorized('Two-factor authentication code failed. Please try again'));
   }
