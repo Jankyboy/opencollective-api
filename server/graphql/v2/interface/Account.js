@@ -268,7 +268,7 @@ export const Account = new GraphQLInterfaceType({
 });
 
 const accountTransactions = {
-  type: TransactionCollection,
+  type: new GraphQLNonNull(TransactionCollection),
   args: {
     type: { type: TransactionType },
     limit: { type: GraphQLInt, defaultValue: 100 },
@@ -278,8 +278,16 @@ const accountTransactions = {
       defaultValue: ChronologicalOrderInput.defaultValue,
     },
   },
-  async resolve(collective, args) {
+  async resolve(collective, args, req) {
     const where = { CollectiveId: collective.id };
+
+    // When users are admins, also fetch their incognito contributions
+    if (req.remoteUser?.isAdminOfCollective(collective)) {
+      const incognitoProfile = await req.remoteUser.getIncognitoProfile();
+      if (incognitoProfile) {
+        where.CollectiveId = { [Op.or]: [collective.id, incognitoProfile.id] };
+      }
+    }
 
     if (args.type) {
       where.type = args.type;

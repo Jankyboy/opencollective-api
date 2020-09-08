@@ -78,9 +78,20 @@ const TransactionsQuery = {
       where.push({ FromCollectiveId: fromAccount.id });
     }
     if (account) {
-      where.push({
-        [Op.or]: [{ CollectiveId: account.id }, { UsingVirtualCardFromCollectiveId: account.id, type: 'DEBIT' }],
-      });
+      const accountConditions = [
+        { CollectiveId: account.id },
+        { UsingVirtualCardFromCollectiveId: account.id, type: 'DEBIT' },
+      ];
+
+      // When users are admins, also fetch their incognito contributions
+      if (req.remoteUser?.isAdminOfCollective(account)) {
+        const incognitoProfile = await req.remoteUser.getIncognitoProfile();
+        if (incognitoProfile) {
+          accountConditions.push({ CollectiveId: incognitoProfile.id });
+        }
+      }
+
+      where.push({ [Op.or]: accountConditions });
     }
     if (args.searchTerm) {
       const sanitizedTerm = args.searchTerm.replace(/(_|%|\\)/g, '\\$1');
