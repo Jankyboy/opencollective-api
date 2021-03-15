@@ -30,7 +30,7 @@ console.log('startDate', startDate, 'endDate', endDate);
 
 const debug = debugLib('monthlyreport');
 
-const init = () => {
+const init = async () => {
   const startTime = new Date();
 
   const query = {
@@ -49,15 +49,15 @@ const init = () => {
     query.include[0].where.slug = process.env.SLUG;
   }
 
-  models.ConnectedAccount.findAll(query)
-    .tap(connectedAccounts => {
-      console.log(`Preparing the ${month} report for ${connectedAccounts.length} collectives`);
-    })
-    .map(connectedAccount => {
-      const collective = connectedAccount.collective;
-      collective.twitterAccount = connectedAccount;
-      return collective;
-    })
+  const connectedAccounts = await models.ConnectedAccount.findAll(query);
+
+  console.log(`Preparing the ${month} report for ${connectedAccounts.length} collectives`);
+
+  Promise.map(connectedAccounts, connectedAccount => {
+    const collective = connectedAccount.collective;
+    collective.twitterAccount = connectedAccount;
+    return collective;
+  })
     .map(processCollective)
     .then(() => {
       const timeLapsed = Math.round((new Date() - startTime) / 1000);
@@ -103,12 +103,11 @@ const processCollective = collective => {
   const promises = [
     collective.getTopBackers(null, null, 10),
     collective.getTopBackers(startDate, endDate, 10),
-    collective.getBalance(endDate),
+    collective.getBalance({ endDate }),
     collective.getTotalTransactions(startDate, endDate, 'donation', 'amount'),
     collective.getTotalTransactions(startDate, endDate, 'expense', 'amount'),
     collective.getBackersStats(startDate, endDate),
     collective.getBackersCount({ since: startDate, until: endDate }),
-    collective.getTopExpenseCategories(startDate, endDate),
   ];
 
   return Promise.all(promises)
@@ -123,7 +122,6 @@ const processCollective = collective => {
       data.collective.stats.balance = results[2];
       data.collective.stats.totalReceived = results[3];
       data.collective.stats.totalSpent = results[4];
-      data.collective.stats.topExpenseCategories = results[7];
       return data;
     })
     .then(data => sendTweet(collective.twitterAccount, data))
@@ -160,15 +158,6 @@ const sendTweet = async (twitterAccount, data) => {
     totalAmountReceived: formatCurrency(stats.totalReceived, data.collective.currency),
     topBackersTwitterHandles: compileTwitterHandles(data.topBackers, 0, 3),
     newBackersTwitterHandles: compileTwitterHandles(data.topNewBackers, stats.backers.new, 5),
-    topExpenseCategories:
-      stats.topExpenseCategories.length === 0
-        ? 'none'
-        : stats.topExpenseCategories
-            .slice(0, 2)
-            // Notice: this category property is virtual, it actually corresponds to the first tag of the expense.
-            .map(ec => ec.category)
-            .join(' & ')
-            .toLowerCase(),
   };
 
   const template = stats.totalReceived === 0 ? 'monthlyStatsNoNewDonation' : 'monthlyStats';

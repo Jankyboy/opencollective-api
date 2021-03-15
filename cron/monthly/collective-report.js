@@ -4,10 +4,11 @@ import '../../server/env';
 import Promise from 'bluebird';
 import config from 'config';
 import debugLib from 'debug';
-import { filter, pick, without } from 'lodash';
+import { filter, isEmpty, pick, without } from 'lodash';
 import moment from 'moment';
 
 import { notifyAdminsOfCollective } from '../../server/lib/notifications';
+import { getConsolidatedInvoicePdfs } from '../../server/lib/pdf';
 import { getTiersStats } from '../../server/lib/utils';
 import models, { Op } from '../../server/models';
 
@@ -37,7 +38,7 @@ const processCollectives = collectives => {
   return Promise.map(collectives, processCollective, { concurrency: 1 });
 };
 
-const init = () => {
+const init = async () => {
   const startTime = new Date();
 
   const query = {
@@ -69,16 +70,15 @@ const init = () => {
     query.where.slug = { [Op.in]: slugs };
   }
 
-  models.Collective.findAll(query)
-    .tap(collectives => {
-      console.log(`Preparing the ${month} report for ${collectives.length} collectives`);
-    })
-    .then(processCollectives)
-    .then(() => {
-      const timeLapsed = Math.round((new Date() - startTime) / 1000);
-      console.log(`Total run time: ${timeLapsed}s`);
-      process.exit(0);
-    });
+  const collectives = await models.Collective.findAll(query);
+
+  console.log(`Preparing the ${month} report for ${collectives.length} collectives`);
+
+  processCollectives(collectives).then(() => {
+    const timeLapsed = Math.round((new Date() - startTime) / 1000);
+    console.log(`Total run time: ${timeLapsed}s`);
+    process.exit(0);
+  });
 };
 
 const topBackersCache = {};
@@ -170,7 +170,7 @@ const processCollective = collective => {
       attributes: ['id', 'slug', 'name', 'image', 'firstDonation', 'lastDonation', 'totalDonations', 'tier'],
       until: endDate,
     }),
-    collective.getBalance(endDate),
+    collective.getBalance({ endDate }),
     collective.getTotalTransactions(startDate, endDate, 'donation'),
     collective.getTotalTransactions(startDate, endDate, 'expense'),
     collective.getExpenses(null, startDate, endDate),
@@ -241,7 +241,15 @@ const processCollective = collective => {
         return collective;
       });
     })
-    .then(collective => {
+    .then(async collective => {
+      if (collective.type === 'ORGANIZATION') {
+        const monthlyConsolidatedInvoices = await getConsolidatedInvoicePdfs(collective);
+
+        if (!isEmpty(monthlyConsolidatedInvoices)) {
+          options.attachments.push(...monthlyConsolidatedInvoices);
+          emailData.consolidatedPdfs = true;
+        }
+      }
       const activity = {
         type: 'collective.monthlyreport',
         data: emailData,

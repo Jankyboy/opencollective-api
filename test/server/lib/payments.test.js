@@ -110,14 +110,12 @@ describe('server/lib/payments', () => {
   beforeEach('add host to collective', () => collective.addHost(host.collective, host));
   beforeEach('add host to collective2', () => collective2.addHost(host.collective, host));
 
-  beforeEach('create stripe account', done => {
-    models.ConnectedAccount.create({
+  beforeEach('create stripe account', async () => {
+    await models.ConnectedAccount.create({
       service: 'stripe',
       token: 'abc',
       CollectiveId: host.collective.id,
-    })
-      .tap(() => done())
-      .catch(done);
+    });
   });
 
   /**
@@ -377,10 +375,10 @@ describe('server/lib/payments', () => {
       expect(debitRefundTransaction.CollectiveId).to.equal(collective.id);
     });
 
-    it('should allow collective to start a refund', async () => {
+    it('should refund platform fees on top when refunding original transaction', async () => {
       // Create Open Collective Inc
       await fakeHost({ id: 8686 });
-      const order = await fakeOrder();
+      const order = await fakeOrder({ status: 'ACTIVE' });
       const transaction = await models.Transaction.createFromPayload({
         CreatedByUserId: order.CreatedByUserId,
         FromCollectiveId: order.FromCollectiveId,
@@ -398,7 +396,7 @@ describe('server/lib/payments', () => {
           platformFeeInHostCurrency: 500,
           paymentProcessorFeeInHostCurrency: 175,
           description: 'Monthly subscription to Webpack',
-          data: { charge: { id: 'ch_1AzPXHD8MNtzsDcgXpUhv4pm' }, isFeesOnTop: true },
+          data: { charge: { id: 'ch_refunded_charge' }, isFeesOnTop: true },
         },
       });
 
@@ -407,8 +405,8 @@ describe('server/lib/payments', () => {
 
       await payments.createRefundTransaction(transaction, 0, null, user);
 
-      const refundedTransactions = await order.getTransactions();
-      expect(refundedTransactions).to.have.lengthOf(8);
+      const refundedTransactions = await order.getTransactions({ where: { isRefund: true } });
+      expect(refundedTransactions).to.have.lengthOf(4);
     });
   }); /* createRefundTransaction */
 

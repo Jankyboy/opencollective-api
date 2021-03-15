@@ -2,7 +2,6 @@ import Promise from 'bluebird';
 import config from 'config';
 import debugLib from 'debug';
 import { get, intersection } from 'lodash';
-import { Op } from 'sequelize';
 
 import { maxInteger } from '../constants/math';
 import { PAYMENT_METHOD_SERVICES, PAYMENT_METHOD_TYPES } from '../constants/paymentMethods';
@@ -10,6 +9,7 @@ import { TransactionTypes } from '../constants/transactions';
 import { getFxRate } from '../lib/currency';
 import { sumTransactions } from '../lib/hostlib';
 import * as libpayments from '../lib/payments';
+import sequelize, { DataTypes, Op } from '../lib/sequelize';
 import { isTestToken } from '../lib/stripe';
 import { cleanTags, formatArrayToString, formatCurrency } from '../lib/utils';
 
@@ -17,10 +17,10 @@ import CustomDataTypes from './DataTypes';
 
 const debug = debugLib('models:PaymentMethod');
 
-export default function (Sequelize, DataTypes) {
-  const { models } = Sequelize;
+const { models } = sequelize;
 
-  const PaymentMethod = Sequelize.define(
+function defineModel() {
+  const PaymentMethod = sequelize.define(
     'PaymentMethod',
     {
       id: {
@@ -101,12 +101,12 @@ export default function (Sequelize, DataTypes) {
 
       createdAt: {
         type: DataTypes.DATE,
-        defaultValue: Sequelize.NOW,
+        defaultValue: DataTypes.NOW,
       },
 
       updatedAt: {
         type: DataTypes.DATE,
-        defaultValue: Sequelize.NOW,
+        defaultValue: DataTypes.NOW,
       },
 
       confirmedAt: {
@@ -295,15 +295,17 @@ export default function (Sequelize, DataTypes) {
         );
       }
     } else {
+      const collective = await models.Collective.findByPk(this.CollectiveId);
+
       // If there is a monthly limit per member, the user needs to be a member or admin of the collective that owns the payment method
-      if (this.monthlyLimitPerMember && !user.isMember(this.CollectiveId)) {
+      if (this.monthlyLimitPerMember && !user.isMemberOfCollective(collective)) {
         throw new Error(
           "You don't have enough permissions to use this payment method (you need to be a member or an admin of the collective that owns this payment method)",
         );
       }
 
       // If there is no monthly limit, the user needs to be an admin of the collective that owns the payment method
-      if (!this.monthlyLimitPerMember && !user.isAdmin(this.CollectiveId) && this.type !== 'manual') {
+      if (!this.monthlyLimitPerMember && !user.isAdminOfCollective(collective) && this.type !== 'manual') {
         throw new Error(
           "You don't have enough permissions to use this payment method (you need to be an admin of the collective that owns this payment method)",
         );
@@ -382,8 +384,8 @@ export default function (Sequelize, DataTypes) {
     if (user) {
       await user.populateRoles();
     }
-    // virtualcard monthlyLimitPerMember are calculated differently so the getBalance already returns the right result
-    if (this.type === 'virtualcard') {
+    // giftcard monthlyLimitPerMember are calculated differently so the getBalance already returns the right result
+    if (this.type === 'giftcard') {
       return getBalance(this);
     }
 
@@ -429,7 +431,7 @@ export default function (Sequelize, DataTypes) {
   };
 
   /**
-   * Returns the sum of the children PaymenMethod values (aka the virtual cards which
+   * Returns the sum of the children PaymenMethod values (aka the gift cards which
    * have `sourcePaymentMethod` set to this PM).
    */
   PaymentMethod.prototype.getChildrenPMTotalSum = async function () {
@@ -444,11 +446,11 @@ export default function (Sequelize, DataTypes) {
   };
 
   /**
-   * Check if virtual card is claimed.
+   * Check if gift card is claimed.
    * Always return true for other payment methods.
    */
   PaymentMethod.prototype.isConfirmed = function () {
-    return this.type !== 'virtualcard' || this.confirmedAt !== null;
+    return this.type !== 'giftcard' || this.confirmedAt !== null;
   };
 
   /**
@@ -495,3 +497,9 @@ export default function (Sequelize, DataTypes) {
 
   return PaymentMethod;
 }
+
+// We're using the defineModel function to keep the indentation and have a clearer git history.
+// Please consider this if you plan to refactor.
+const PaymentMethod = defineModel();
+
+export default PaymentMethod;

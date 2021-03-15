@@ -2,21 +2,31 @@ import Promise from 'bluebird';
 import debugLib from 'debug';
 import slugify from 'limax';
 import { defaults } from 'lodash';
-import { Op } from 'sequelize';
 import Temporal from 'sequelize-temporal';
 
 import { maxInteger } from '../constants/math';
-import { capitalize, days, formatCurrency, stripTags } from '../lib/utils';
+import { buildSanitizerOptions, sanitizeHTML } from '../lib/sanitize-html';
+import sequelize, { DataTypes, Op } from '../lib/sequelize';
+import { capitalize, days, formatCurrency } from '../lib/utils';
 import { isSupportedVideoProvider, supportedVideoProviders } from '../lib/validators';
 
 import CustomDataTypes from './DataTypes';
 
 const debug = debugLib('models:Tier');
 
-export default function (Sequelize, DataTypes) {
-  const { models } = Sequelize;
+const longDescriptionSanitizerOpts = buildSanitizerOptions({
+  titles: true,
+  basicTextFormatting: true,
+  multilineTextFormatting: true,
+  images: true,
+  links: true,
+  videoIframes: true,
+});
 
-  const Tier = Sequelize.define(
+function defineModel() {
+  const { models } = sequelize;
+
+  const Tier = sequelize.define(
     'Tier',
     {
       id: {
@@ -98,9 +108,15 @@ export default function (Sequelize, DataTypes) {
           if (!content) {
             this.setDataValue('longDescription', null);
           } else {
-            this.setDataValue('longDescription', stripTags(content));
+            this.setDataValue('longDescription', sanitizeHTML(content, longDescriptionSanitizerOpts));
           }
         },
+      },
+
+      useStandalonePage: {
+        type: DataTypes.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
       },
 
       videoUrl: {
@@ -205,22 +221,20 @@ export default function (Sequelize, DataTypes) {
 
       startsAt: {
         type: DataTypes.DATE,
-        defaultValue: Sequelize.NOW,
       },
 
       endsAt: {
         type: DataTypes.DATE,
-        defaultValue: Sequelize.NOW,
       },
 
       createdAt: {
         type: DataTypes.DATE,
-        defaultValue: Sequelize.NOW,
+        defaultValue: DataTypes.NOW,
       },
 
       updatedAt: {
         type: DataTypes.DATE,
-        defaultValue: Sequelize.NOW,
+        defaultValue: DataTypes.NOW,
       },
 
       deletedAt: {
@@ -362,6 +376,15 @@ export default function (Sequelize, DataTypes) {
     return this.availableQuantity().then(available => available - quantityNeeded >= 0);
   };
 
+  Tier.prototype.setCurrency = async function (currency) {
+    // Nothing to do
+    if (currency === this.currency) {
+      return this;
+    }
+
+    return this.update({ currency });
+  };
+
   /**
    * Class Methods
    */
@@ -394,7 +417,13 @@ export default function (Sequelize, DataTypes) {
     });
   };
 
-  Temporal(Tier, Sequelize);
+  Temporal(Tier, sequelize);
 
   return Tier;
 }
+
+// We're using the defineModel method to keep the indentation and have a clearer git history.
+// Please consider this if you plan to refactor.
+const Tier = defineModel();
+
+export default Tier;

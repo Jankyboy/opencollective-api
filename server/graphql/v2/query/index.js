@@ -10,8 +10,11 @@ import ExpensesQuery from './ExpensesQuery';
 import HostQuery from './HostQuery';
 import IndividualQuery from './IndividualQuery';
 import OrderQuery from './OrderQuery';
+import OrdersQuery from './OrdersQuery';
+import ThirdPartyApiClientTokenQuery from './ThirdPartyApiClientTokenQuery';
 import TierQuery from './TierQuery';
 import TransactionsQuery from './TransactionsQuery';
+import UpdateQuery from './UpdateQuery';
 
 const query = {
   account: AccountQuery,
@@ -23,9 +26,12 @@ const query = {
   expense: ExpenseQuery,
   hosts: HostsCollectionQuery,
   order: OrderQuery,
+  orders: OrdersQuery,
   tier: TierQuery,
   // transaction: TransactionQuery,
   transactions: TransactionsQuery,
+  update: UpdateQuery,
+  thirdPartyApiClientToken: ThirdPartyApiClientTokenQuery,
   loggedInAccount: {
     type: Account,
     resolve(_, args, req) {

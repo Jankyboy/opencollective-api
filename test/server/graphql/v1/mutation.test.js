@@ -7,6 +7,7 @@ import roles from '../../../../server/constants/roles';
 import emailLib from '../../../../server/lib/email';
 import * as payments from '../../../../server/lib/payments';
 import models from '../../../../server/models';
+import { fakePaymentMethod } from '../../../test-helpers/fake-data';
 import * as utils from '../../../utils';
 
 let host, user1, user2, user3, collective1, event1, ticket1;
@@ -55,42 +56,45 @@ describe('server/graphql/v1/mutation', () => {
     await utils.resetTestDB();
   });
 
-  beforeEach('create user1', () => models.User.createUserWithCollective(utils.data('user1')).tap(u => (user1 = u)));
-  beforeEach('create host user 1', () =>
-    models.User.createUserWithCollective({
+  beforeEach('create user1', async () => {
+    user1 = await models.User.createUserWithCollective(utils.data('user1'));
+  });
+  beforeEach('create host user 1', async () => {
+    host = await models.User.createUserWithCollective({
       ...utils.data('host1'),
       currency: 'EUR',
-    }).tap(u => (host = u)),
-  );
+    });
+  });
 
-  beforeEach('create user2', () => models.User.createUserWithCollective(utils.data('user2')).tap(u => (user2 = u)));
-  beforeEach('create user3', () => models.User.createUserWithCollective(utils.data('user3')).tap(u => (user3 = u)));
-  beforeEach('create collective1', () =>
-    models.Collective.create(utils.data('collective1')).tap(g => (collective1 = g)),
-  );
+  beforeEach('create user2', async () => {
+    user2 = await models.User.createUserWithCollective(utils.data('user2'));
+  });
+  beforeEach('create user3', async () => {
+    user3 = await models.User.createUserWithCollective(utils.data('user3'));
+  });
+  beforeEach('create collective1', async () => {
+    collective1 = await models.Collective.create(utils.data('collective1'));
+  });
   beforeEach('add host', () => collective1.addHost(host.collective, host));
   beforeEach('add user1 as admin to collective1', () => collective1.addUserWithRole(user1, roles.ADMIN));
   beforeEach('add user2 as admin to collective1', () => collective1.addUserWithRole(user2, roles.ADMIN));
 
-  beforeEach('create stripe account', done => {
-    models.ConnectedAccount.create({
+  beforeEach('create stripe account', async () => {
+    await models.ConnectedAccount.create({
       service: 'stripe',
       token: 'abc',
       CollectiveId: host.collective.id,
-    })
-      .tap(() => done())
-      .catch(done);
+    });
   });
 
-  beforeEach('create an event collective', () =>
-    models.Collective.create(
+  beforeEach('create an event collective', async () => {
+    event1 = await models.Collective.create(
       Object.assign(utils.data('event1'), {
         CreatedByUserId: user1.id,
         ParentCollectiveId: collective1.id,
       }),
-    ).tap(e => (event1 = e)),
-  );
-  beforeEach('add user1 as admin of event1', () => event1.addUserWithRole(user1, roles.ADMIN));
+    );
+  });
 
   describe('createCollective tests', () => {
     const createCollectiveMutation = gql`
@@ -190,14 +194,9 @@ describe('server/graphql/v1/mutation', () => {
           order: [['MemberCollectiveId', 'ASC']],
         });
         expect(createdEvent.currency).to.equal(createdEvent.parentCollective.currency);
-        expect(members).to.have.length(3);
-        expect(members[0].CollectiveId).to.equal(event.id);
-        expect(members[0].MemberCollectiveId).to.equal(user1.CollectiveId);
-        expect(members[0].role).to.equal(roles.ADMIN);
-        expect(members[1].role).to.equal(roles.HOST);
-        expect(members[1].MemberCollectiveId).to.equal(collective1.HostCollectiveId);
-        expect(members[2].role).to.equal(roles.ADMIN);
-        expect(members[2].MemberCollectiveId).to.equal(user2.CollectiveId);
+        expect(members).to.have.length(1);
+        expect(members[0].role).to.equal(roles.HOST);
+        expect(members[0].MemberCollectiveId).to.equal(collective1.HostCollectiveId);
 
         // We remove the first tier
         event.tiers.shift();
@@ -233,80 +232,6 @@ describe('server/graphql/v1/mutation', () => {
         const updatedEvent = r4.data.editCollective;
         expect(updatedEvent.tiers.length).to.equal(event.tiers.length);
         expect(updatedEvent.tiers[0].amount).to.equal(event.tiers[0].amount);
-      });
-    });
-
-    describe('apply to create a collective', () => {
-      let newCollectiveData;
-
-      beforeEach(() => {
-        newCollectiveData = {
-          slug: 'newcollective',
-          name: 'new collective',
-          website: 'http://newcollective.org',
-          twitterHandle: 'newcollective',
-          HostCollectiveId: host.collective.id,
-          currency: 'EUR',
-        };
-      });
-
-      it('fails if not logged in', async () => {
-        const res = await utils.graphqlQuery(createCollectiveMutation, {
-          collective: newCollectiveData,
-        });
-        expect(res.errors).to.exist;
-        expect(res.errors[0].message).to.contain('You need to be logged in to create a collective');
-      });
-
-      it("fails to create a collective on a host that doesn't accept applications", async () => {
-        await host.collective.update({ settings: { apply: false } });
-        const collective = {
-          name: 'new collective',
-          HostCollectiveId: host.CollectiveId,
-        };
-        const result = await utils.graphqlQuery(createCollectiveMutation, { collective }, user1);
-        expect(result.errors[0].message).to.equal('This host does not accept applications for new collectives');
-      });
-
-      it('creates a collective', async () => {
-        emailSendMessageSpy.resetHistory();
-        await host.collective.update({ settings: { apply: true } });
-        const res = await utils.graphqlQuery(createCollectiveMutation, { collective: newCollectiveData }, user1);
-        res.errors && console.error(res.errors[0]);
-        const newCollective = res.data.createCollective;
-        const hostMembership = await models.Member.findOne({
-          where: { CollectiveId: newCollective.id, role: 'HOST' },
-        });
-        const adminMembership = await models.Member.findOne({
-          where: { CollectiveId: newCollective.id, role: 'ADMIN' },
-        });
-
-        expect(newCollective.currency).to.equal(newCollectiveData.currency);
-        expect(newCollective.tiers).to.have.length(2);
-        expect(newCollective.tiers[0].presets).to.have.length(4);
-        expect(hostMembership.MemberCollectiveId).to.equal(host.CollectiveId);
-        expect(adminMembership.MemberCollectiveId).to.equal(user1.CollectiveId);
-
-        expect(newCollective.isActive).to.be.false;
-        expect(newCollective.host.id).to.equal(host.collective.id);
-        await utils.waitForCondition(() => emailSendMessageSpy.callCount === 3);
-        expect(emailSendMessageSpy.callCount).to.equal(3);
-
-        const applyEmailArgs = emailSendMessageSpy.args.find(callArgs => callArgs[1].includes('Thanks for applying'));
-        expect(applyEmailArgs).to.exist;
-        expect(applyEmailArgs[0]).to.equal(user1.email);
-
-        const newCollectiveArgs = emailSendMessageSpy.args.find(callArgs =>
-          callArgs[1].includes('would love to be hosted'),
-        );
-        expect(newCollectiveArgs).to.exist;
-        expect(newCollectiveArgs[0]).to.equal(host.email);
-
-        const welcomeArgs = emailSendMessageSpy.args.find(callArgs =>
-          callArgs[1].includes('Welcome to Open Collective!'),
-        );
-        expect(welcomeArgs).to.exist;
-        expect(welcomeArgs[0]).to.equal(user1.email);
       });
     });
   });
@@ -421,9 +346,9 @@ describe('server/graphql/v1/mutation', () => {
   });
 
   describe('createOrder tests', () => {
-    beforeEach('create ticket 1', () =>
-      models.Tier.create(Object.assign(utils.data('ticket1'), { CollectiveId: event1.id })).tap(t => (ticket1 = t)),
-    );
+    beforeEach('create ticket 1', async () => {
+      ticket1 = await models.Tier.create(Object.assign(utils.data('ticket1'), { CollectiveId: event1.id }));
+    });
 
     beforeEach('create ticket 2', () =>
       models.Tier.create(Object.assign(utils.data('ticket2'), { CollectiveId: event1.id })),
@@ -655,7 +580,7 @@ describe('server/graphql/v1/mutation', () => {
           expect(emailSendMessageSpy.firstCall.args[0]).to.equal('user2@opencollective.com');
           expect(emailSendMessageSpy.firstCall.args[1]).to.equal('Your Organization on Open Collective');
           expect(emailSendMessageSpy.secondCall.args[0]).to.equal('user1@opencollective.com');
-          expect(emailSendMessageSpy.secondCall.args[1]).to.equal("Google joined Scouts d'Arlon as backer");
+          expect(emailSendMessageSpy.secondCall.args[1]).to.equal("Google joined Scouts d'Arlon as backer ($20/m)");
           expect(emailSendMessageSpy.secondCall.args[2]).to.contain('Looking forward!'); // publicMessage
           expect(emailSendMessageSpy.secondCall.args[2]).to.contain(
             '@google thanks for your financial contribution to @scouts',
@@ -809,8 +734,9 @@ describe('server/graphql/v1/mutation', () => {
             },
           });
           expect(members).to.have.length(1);
-          await utils.waitForCondition(() => emailSendMessageSpy.callCount > 1);
-          expect(emailSendSpy.callCount).to.equal(2);
+          // 2 for the collective admins, 1 for the contributor
+          await utils.waitForCondition(() => emailSendMessageSpy.callCount === 3);
+          expect(emailSendSpy.callCount).to.equal(3);
           const activityData = emailSendSpy.firstCall.args[2];
           expect(activityData.member.role).to.equal('ATTENDEE');
           expect(activityData.collective.type).to.equal('EVENT');
@@ -818,12 +744,15 @@ describe('server/graphql/v1/mutation', () => {
           expect(activityData.collective.slug).to.equal(event1.slug);
           expect(activityData.member.memberCollective.slug).to.equal(user2.collective.slug);
           expect(emailSendSpy.firstCall.args[0]).to.equal('collective.member.created');
-          expect(emailSendSpy.secondCall.args[0]).to.equal('ticket.confirmed');
-          expect(emailSendMessageSpy.callCount).to.equal(2);
+          expect(emailSendSpy.secondCall.args[0]).to.equal('collective.member.created');
+          expect(emailSendSpy.thirdCall.args[0]).to.equal('ticket.confirmed');
+          expect(emailSendMessageSpy.callCount).to.equal(3);
           expect(emailSendMessageSpy.firstCall.args[0]).to.equal('user1@opencollective.com');
           expect(emailSendMessageSpy.firstCall.args[1]).to.equal('Anish Bas joined January meetup as attendee');
           expect(emailSendMessageSpy.secondCall.args[0]).to.equal('user2@opencollective.com');
-          expect(emailSendMessageSpy.secondCall.args[1]).to.equal('2 tickets confirmed for January meetup');
+          expect(emailSendMessageSpy.secondCall.args[1]).to.equal('Anish Bas joined January meetup as attendee');
+          expect(emailSendMessageSpy.thirdCall.args[0]).to.equal('user2@opencollective.com');
+          expect(emailSendMessageSpy.thirdCall.args[1]).to.equal('2 tickets confirmed for January meetup');
         });
 
         it('from a new user', async () => {
@@ -857,6 +786,7 @@ describe('server/graphql/v1/mutation', () => {
             email: 'newuser@email.com',
           });
           const result = await utils.graphqlQuery(createOrderMutation, { order }, remoteUser);
+          result.errors && console.error(result.errors);
           expect(result).to.deep.equal({
             data: {
               createOrder: {
@@ -964,14 +894,14 @@ describe('server/graphql/v1/mutation', () => {
           expect(executeOrderArgument[1].totalAmount).to.equal(4000);
           expect(executeOrderArgument[1].currency).to.equal('USD');
           expect(executeOrderArgument[1].paymentMethod.token).to.equal('tok_123456781234567812345678');
-          await utils.waitForCondition(() => emailSendMessageSpy.callCount > 0);
-          expect(emailSendMessageSpy.callCount).to.equal(1);
+          await utils.waitForCondition(() => emailSendMessageSpy.callCount === 2);
+          expect(emailSendMessageSpy.callCount).to.equal(2);
           expect(emailSendMessageSpy.firstCall.args[0]).to.equal(user1.email);
           expect(emailSendMessageSpy.firstCall.args[1]).to.contain(`Anish Bas joined ${event1.name} as backer`);
           expect(emailSendMessageSpy.firstCall.args[2]).to.contain('/scouts/events/jan-meetup');
         });
 
-        it('from an existing but logged out user (should fail)', async () => {
+        describe('from an existing but logged out user', async () => {
           const createOrderMutation = gql`
             mutation CreateOrder($order: OrderInputType!) {
               createOrder(order: $order) {
@@ -997,27 +927,72 @@ describe('server/graphql/v1/mutation', () => {
             }
           `;
 
-          const order = {
-            paymentMethod: {
-              token: 'tok_123456781234567812345678',
-              service: 'stripe',
-              name: '4242',
-              data: {
-                expMonth: 11,
-                expYear: 2020,
+          it('works with an order that has only fresh info', async () => {
+            const order = {
+              paymentMethod: {
+                token: 'tok_123456781234567812345678',
+                service: 'stripe',
+                name: '4242',
+                data: {
+                  expMonth: 11,
+                  expYear: 2020,
+                },
               },
-            },
-            collective: { id: event1.id },
-            tier: { id: 4 },
-            quantity: 2,
-            user: { email: user2.email },
-          };
+              collective: { id: event1.id },
+              tier: { id: 4 },
+              quantity: 2,
+              guestInfo: { email: user2.email },
+            };
 
-          const loggedInUser = null;
-          const result = await utils.graphqlQuery(createOrderMutation, { order }, loggedInUser);
-          // result.errors && console.error(result.errors[0]);
-          expect(result.errors).to.exist;
-          expect(result.errors[0].message).to.equal('You need to be authenticated to perform this action');
+            const loggedInUser = null;
+            const result = await utils.graphqlQuery(createOrderMutation, { order }, loggedInUser);
+            result.errors && console.error(result.errors[0]);
+            expect(result.errors).to.not.exist;
+            expect(result.data).to.deep.equal({
+              createOrder: {
+                id: 1,
+                tier: {
+                  stats: {
+                    availableQuantity: 98,
+                  },
+                  description: '$20 ticket',
+                  id: 4,
+                  maxQuantity: 100,
+                  name: 'paid ticket',
+                },
+                createdByUser: {
+                  email: null,
+                  id: 3,
+                },
+                collective: {
+                  id: event1.id,
+                  slug: 'jan-meetup',
+                },
+              },
+            });
+          });
+
+          it('cannot use an existing payment method', async () => {
+            const user2PaymentMethod = await fakePaymentMethod({
+              CollectiveId: user2.CollectiveId,
+              service: 'opencollective',
+              type: 'prepaid',
+            });
+            const order = {
+              paymentMethod: { id: user2PaymentMethod.id },
+              collective: { id: event1.id },
+              tier: { id: 4 },
+              quantity: 2,
+              guestInfo: { email: user2.email },
+            };
+
+            const loggedInUser = null;
+            const result = await utils.graphqlQuery(createOrderMutation, { order }, loggedInUser);
+            expect(result.errors).to.exist;
+            expect(result.errors[0].message).to.equal(
+              'You need to be logged in to be able to use an existing payment method',
+            );
+          });
         });
 
         it('from a new user', async () => {
@@ -1096,8 +1071,8 @@ describe('server/graphql/v1/mutation', () => {
           expect(executeOrderArgument[1].totalAmount).to.equal(4000);
           expect(executeOrderArgument[1].currency).to.equal('USD');
           expect(executeOrderArgument[1].paymentMethod.token).to.equal('tok_123456781234567812345678');
-          await utils.waitForCondition(() => emailSendMessageSpy.callCount > 0);
-          expect(emailSendMessageSpy.callCount).to.equal(1);
+          await utils.waitForCondition(() => emailSendMessageSpy.callCount === 2);
+          expect(emailSendMessageSpy.callCount).to.equal(2);
           expect(emailSendMessageSpy.firstCall.args[0]).to.equal(user1.email);
           expect(emailSendMessageSpy.firstCall.args[1]).to.contain('incognito joined January meetup as backer');
         });

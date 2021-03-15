@@ -2,8 +2,10 @@ import { GraphQLInt, GraphQLList, GraphQLNonNull, GraphQLObjectType, GraphQLStri
 import GraphQLJSON from 'graphql-type-json';
 import { get, pick } from 'lodash';
 
-import { PAYMENT_METHOD_SERVICE, PAYMENT_METHOD_TYPES } from '../../../constants/paymentMethods';
-import { getPaymentMethodType, PaymentMethodType } from '../enum/PaymentMethodType';
+import { PAYMENT_METHOD_SERVICE, PAYMENT_METHOD_TYPE, PAYMENT_METHOD_TYPES } from '../../../constants/paymentMethods';
+import { getLegacyPaymentMethodType, PaymentMethodLegacyType } from '../enum/PaymentMethodLegacyType';
+import { PaymentMethodService } from '../enum/PaymentMethodService';
+import { PaymentMethodType } from '../enum/PaymentMethodType';
 import { idEncode } from '../identifiers';
 import { Account } from '../interface/Account';
 import { Amount } from '../object/Amount';
@@ -41,17 +43,16 @@ export const PaymentMethod = new GraphQLObjectType({
         },
       },
       service: {
-        type: GraphQLString,
-        deprecationReason: '2020-08-18: This field is being deprecated in favor of providerType',
+        type: PaymentMethodService,
       },
       type: {
-        type: GraphQLString,
-        deprecationReason: '2020-08-18: This field is being deprecated in favor of providerType',
+        type: PaymentMethodType,
       },
       providerType: {
         description: 'Defines the type of the payment method. Meant to be moved to "type" in the future.',
-        type: PaymentMethodType,
-        resolve: getPaymentMethodType,
+        deprecationReason: '2021-03-02: Please use service + type',
+        type: PaymentMethodLegacyType,
+        resolve: getLegacyPaymentMethodType,
       },
       balance: {
         type: new GraphQLNonNull(Amount),
@@ -64,7 +65,18 @@ export const PaymentMethod = new GraphQLObjectType({
       account: {
         type: Account,
         resolve(paymentMethod, _, req) {
-          return req.loaders.Collective.byId.load(paymentMethod.CollectiveId);
+          if (paymentMethod.CollectiveId) {
+            return req.loaders.Collective.byId.load(paymentMethod.CollectiveId);
+          }
+        },
+      },
+      sourcePaymentMethod: {
+        type: PaymentMethod,
+        description: 'For gift cards, this field will return to the source payment method',
+        resolve(paymentMethod, _, req) {
+          if (paymentMethod.SourcePaymentMethodId && req.remoteUser?.isAdmin(paymentMethod.CollectiveId)) {
+            return req.loaders.PaymentMethod.byId.load(paymentMethod.SourcePaymentMethodId);
+          }
         },
       },
       data: {
@@ -74,9 +86,9 @@ export const PaymentMethod = new GraphQLObjectType({
             return null;
           }
 
-          // Protect and whitelist fields for virtualcard
-          if (paymentMethod.type === 'virtualcard') {
-            if (!req.remoteUser || !req.remoteUser.isAdmin(paymentMethod.CollectiveId)) {
+          // Protect and whitelist fields for gift cards
+          if (paymentMethod.type === PAYMENT_METHOD_TYPE.GIFT_CARD) {
+            if (!req.remoteUser || !req.remoteUser.isAdminOfCollective(paymentMethod.CollectiveId)) {
               return null;
             }
             return pick(paymentMethod.data, ['email']);
@@ -100,7 +112,7 @@ export const PaymentMethod = new GraphQLObjectType({
             }
             const host = await req.loaders.Collective.byId.load(hostId);
             hosts = [host];
-          } else if (paymentMethod.type === 'virtualcard' && paymentMethod.limitedToHostCollectiveIds) {
+          } else if (paymentMethod.type === PAYMENT_METHOD_TYPE.GIFT_CARD && paymentMethod.limitedToHostCollectiveIds) {
             hosts = paymentMethod.limitedToHostCollectiveIds.map(id => {
               return req.loaders.Collective.byId.load(id);
             });

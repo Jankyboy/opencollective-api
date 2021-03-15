@@ -13,6 +13,7 @@ import {
   ordersWithPendingCharges,
   processOrderWithSubscription,
 } from '../../server/lib/recurring-contributions';
+import { parseToBoolean } from '../../server/lib/utils';
 import { sequelize } from '../../server/models';
 
 const REPORT_EMAIL = 'ops@opencollective.com';
@@ -37,6 +38,11 @@ const csvFields = [
 
 const startTime = new Date();
 
+if (parseToBoolean(process.env.SKIP_CHARGE_RECURRING_CONTRIBUTIONS) && !process.env.OFFCYCLE) {
+  console.log('Skipping because SKIP_CHARGE_RECURRING_CONTRIBUTIONS is set.');
+  process.exit();
+}
+
 /** Run the script with parameters read from the command line */
 async function run(options) {
   options.startDate = process.env.START_DATE ? new Date(process.env.START_DATE) : new Date();
@@ -48,7 +54,6 @@ async function run(options) {
     startDate: options.startDate,
   });
   console.log(
-    options,
     `${count} recurring contributions pending charges. Charging ${orders.length} contributions right now. dryRun: ${options.dryRun}`,
   );
   const data = [];
@@ -66,18 +71,18 @@ async function run(options) {
   queue.onIdle().then(async () => {
     if (data.length === 0) {
       await sequelize.close();
-      console.log(options, 'Not generating CSV file');
+      console.log('Not generating CSV file');
       // We used to send a "ReportNoCharges" here but we're stopping this while moving to an Hourly schedule
       return;
     }
-    console.log(options, 'Writing the output to a CSV file');
+    console.log('Writing the output to a CSV file');
     try {
       const csv = json2csv(data, { fields: csvFields });
       if (options.dryRun) {
         fs.writeFileSync('charge_recurring_contributions.output.csv', csv);
       }
       if (!options.dryRun) {
-        console.log(options, 'Sending email report');
+        console.log('Sending email report');
         const attachments = [
           {
             filename: `${new Date().toLocaleDateString()}.csv`,
@@ -91,7 +96,7 @@ async function run(options) {
     }
 
     await sequelize.close();
-    console.log(options, 'Finished running charge recurring contributions');
+    console.log('Finished running charge recurring contributions');
   });
 }
 
@@ -152,21 +157,21 @@ export function parseCommandLineArguments() {
     help: "Don't perform any payment or change to the database",
     default: false,
     action: 'store_const',
-    constant: true,
+    const: true,
   });
   parser.add_argument('-l', '--limit', {
     help: 'Total recurring contributions to process',
-    default: 1000,
+    default: 500,
   });
   parser.add_argument('-c', '--concurrency', {
     help: 'Number of operations to process at the same time',
-    default: 5,
+    default: 3,
   });
   parser.add_argument('-s', '--simulate', {
     help: 'If in dry run, simulate operation between 0 to 5 seconds',
     default: false,
     action: 'store_const',
-    constant: true,
+    const: true,
   });
   const args = parser.parse_args();
   return {

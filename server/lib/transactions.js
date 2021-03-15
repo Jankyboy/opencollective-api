@@ -95,13 +95,18 @@ export async function createFromPaidExpense(
         );
 
       case 'ERROR':
+        // Backward compatible error message parsing
+        // eslint-disable-next-line no-case-declarations
+        const errorMessage =
+          executePaymentResponse.payErrorList?.payError?.[0].error?.message ||
+          executePaymentResponse.payErrorList?.[0].error?.message;
         throw new errors.ServerError(
-          `Error while paying the expense with PayPal: "${executePaymentResponse.payErrorList[0].error.message}". Please contact support@opencollective.com`,
+          `Error while paying the expense with PayPal: "${errorMessage}". Please contact support@opencollective.com or pay it manually through PayPal.`,
         );
 
       default:
         throw new errors.ServerError(
-          `Error while paying the expense with PayPal. Please contact support@opencollective.com`,
+          `Error while paying the expense with PayPal. Please contact support@opencollective.com or pay it manually through PayPal.`,
         );
     }
 
@@ -114,7 +119,9 @@ export async function createFromPaidExpense(
   } else if (payoutMethodType === PayoutMethodTypes.BANK_ACCOUNT) {
     // Notice this is the FX rate between Host and Collective, the user is not involved here and that's why TransferWise quote rate is irrelevant here.
     hostCurrencyFxRate = await getFxRate(expense.currency, host.currency);
-    paymentProcessorFeeInHostCurrency = transactionData ? Math.round(transactionData.quote.fee * 100) : 0;
+    paymentProcessorFeeInHostCurrency = transactionData?.quote
+      ? Math.round(transactionData.quote.fee * 100)
+      : paymentProcessorFeeInHostCurrency;
     paymentProcessorFeeInCollectiveCurrency = Math.round((1 / hostCurrencyFxRate) * paymentProcessorFeeInHostCurrency);
     hostFeeInCollectiveCurrency = Math.round((1 / hostCurrencyFxRate) * hostFeeInHostCurrency);
     platformFeeInCollectiveCurrency = Math.round((1 / hostCurrencyFxRate) * platformFeeInHostCurrency);

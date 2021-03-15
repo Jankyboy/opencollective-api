@@ -1,7 +1,10 @@
+import express from 'express';
 import { GraphQLNonNull, GraphQLString } from 'graphql';
 import { pick } from 'lodash';
 
+import logger from '../../../lib/logger';
 import models from '../../../models';
+import PayoutMethodModel from '../../../models/PayoutMethod';
 import { Forbidden, NotFound, Unauthorized } from '../../errors';
 import { idDecode, IDENTIFIER_TYPES } from '../identifiers';
 import { AccountReferenceInput, fetchAccountWithReference } from '../input/AccountReferenceInput';
@@ -22,17 +25,23 @@ const payoutMethodMutations = {
         description: 'Account where the payout method will be associated',
       },
     },
-    async resolve(_, args, req): Promise<object> {
+    async resolve(_: void, args, req: express.Request): Promise<PayoutMethodModel> {
       if (!req.remoteUser) {
         throw new Unauthorized('You need to be logged in to create a payout method');
       }
 
       const collective = await fetchAccountWithReference(args.account, { loaders: req.loaders, throwIfMissing: true });
-      if (!req.remoteUser.isAdmin(collective.id)) {
+      if (!req.remoteUser.isAdminOfCollective(collective)) {
         throw new Unauthorized("You don't have permission to edit this collective");
       }
 
       if (args.payoutMethod.data.isManualBankTransfer) {
+        try {
+          await collective.setCurrency(args.payoutMethod.data.currency);
+        } catch (error) {
+          logger.error(`Unable to set currency for '${collective.slug}': ${error.message}`);
+        }
+
         const existingBankAccount = await models.PayoutMethod.findOne({
           where: {
             data: { isManualBankTransfer: true },
@@ -59,16 +68,20 @@ const payoutMethodMutations = {
         type: new GraphQLNonNull(GraphQLString),
       },
     },
-    async resolve(_, args, req): Promise<object> {
+    async resolve(_: void, args, req: express.Request): Promise<Record<string, unknown>> {
       if (!req.remoteUser) {
         throw new Unauthorized();
       }
 
       const pmId = idDecode(args.payoutMethodId, IDENTIFIER_TYPES.PAYOUT_METHOD);
       const payoutMethod = await req.loaders.PayoutMethod.byId.load(pmId);
-      if (!pmId) {
+
+      if (!payoutMethod) {
         throw new NotFound('This payout method does not exist');
-      } else if (!req.remoteUser.isAdmin(payoutMethod.CollectiveId)) {
+      }
+
+      const collective = await req.loaders.Collective.byId.load(payoutMethod.CollectiveId);
+      if (!req.remoteUser.isAdminOfCollective(collective)) {
         throw new Forbidden();
       }
 

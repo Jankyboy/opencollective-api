@@ -1,30 +1,47 @@
-/**
- * Dependencies.
- */
 import Promise from 'bluebird';
 import config from 'config';
 import slugify from 'limax';
-import { defaults, pick } from 'lodash';
-import { Op } from 'sequelize';
+import { defaults, pick, uniqBy } from 'lodash';
 import Temporal from 'sequelize-temporal';
-import showdown from 'showdown';
 
 import activities from '../constants/activities';
+import { types as CollectiveType } from '../constants/collectives';
+import MemberRoles from '../constants/roles';
 import * as errors from '../graphql/errors';
-import { mustHaveRole } from '../lib/auth';
 import logger from '../lib/logger';
-import { generateSummaryForHTML } from '../lib/sanitize-html';
-import { sanitizeObject } from '../lib/utils';
+import { buildSanitizerOptions, generateSummaryForHTML, sanitizeHTML } from '../lib/sanitize-html';
+import sequelize, { DataTypes, Op, QueryTypes } from '../lib/sequelize';
+import { flattenArray } from '../lib/utils';
 
-const markdownConverter = new showdown.Converter();
+const sanitizerOptions = buildSanitizerOptions({
+  titles: true,
+  mainTitles: true,
+  basicTextFormatting: true,
+  multilineTextFormatting: true,
+  images: true,
+  links: true,
+  videoIframes: true,
+});
 
 /**
- * Update Model.
+ * Defines the roles targeted by an update notification. Admins of the parent collective are
+ * always included, regardless of the values in this array.
  */
-export default function (Sequelize, DataTypes) {
-  const { models } = Sequelize;
+const PRIVATE_UPDATE_TARGET_ROLES = [
+  MemberRoles.HOST,
+  MemberRoles.ADMIN,
+  MemberRoles.MEMBER,
+  MemberRoles.CONTRIBUTOR,
+  MemberRoles.BACKER,
+  MemberRoles.ATTENDEE,
+];
 
-  const Update = Sequelize.define(
+const PUBLIC_UPDATE_TARGET_ROLES = [...PRIVATE_UPDATE_TARGET_ROLES, MemberRoles.FOLLOWER];
+
+function defineModel() {
+  const { models } = sequelize;
+
+  const Update = sequelize.define(
     'Update',
     {
       id: {
@@ -106,16 +123,13 @@ export default function (Sequelize, DataTypes) {
         },
       },
 
+      // @deprecated
       markdown: DataTypes.TEXT,
+
       html: {
         type: DataTypes.TEXT,
-        get() {
-          return this.getDataValue('markdown')
-            ? markdownConverter.makeHtml(this.getDataValue('markdown'))
-            : this.getDataValue('html');
-        },
         set(html) {
-          this.setDataValue('html', html);
+          this.setDataValue('html', sanitizeHTML(html, sanitizerOptions));
           this.setDataValue('summary', generateSummaryForHTML(html, 240));
         },
       },
@@ -142,12 +156,12 @@ export default function (Sequelize, DataTypes) {
 
       createdAt: {
         type: DataTypes.DATE,
-        defaultValue: Sequelize.NOW,
+        defaultValue: DataTypes.NOW,
       },
 
       updatedAt: {
         type: DataTypes.DATE,
-        defaultValue: Sequelize.NOW,
+        defaultValue: DataTypes.NOW,
       },
 
       deletedAt: {
@@ -177,6 +191,7 @@ export default function (Sequelize, DataTypes) {
             createdAt: this.createdAt,
             updatedAt: this.updatedAt,
             publishedAt: this.publishedAt,
+            isPrivate: this.isPrivate,
             slug: this.slug,
             tags: this.tags,
             CollectiveId: this.CollectiveId,
@@ -201,6 +216,7 @@ export default function (Sequelize, DataTypes) {
             CollectiveId: this.CollectiveId,
             FromCollectiveId: this.FromCollectiveId,
             TierId: this.TierId,
+            isPrivate: this.isPrivate,
           };
         },
       },
@@ -215,6 +231,11 @@ export default function (Sequelize, DataTypes) {
           if (!instance.publishedAt || !instance.slug) {
             return instance.generateSlug();
           }
+        },
+        beforeDestroy: async instance => {
+          const newSlug = `${instance.slug}-${Date.now()}`;
+          instance.slug = newSlug;
+          await instance.save({ paranoid: false, hooks: false });
         },
         afterCreate: instance => {
           models.Activity.create({
@@ -236,7 +257,6 @@ export default function (Sequelize, DataTypes) {
 
   // Edit an update
   Update.prototype.edit = async function (remoteUser, newUpdateData) {
-    mustHaveRole(remoteUser, 'ADMIN', this.CollectiveId, 'edit this update');
     if (newUpdateData.TierId) {
       const tier = await models.Tier.findByPk(newUpdateData.TierId);
       if (!tier) {
@@ -246,18 +266,9 @@ export default function (Sequelize, DataTypes) {
         throw new errors.ValidationFailed("Cannot link this update to a Tier that doesn't belong to this collective");
       }
     }
-    const editableAttributes = [
-      'TierId',
-      'FromCollectiveId',
-      'title',
-      'html',
-      'markdown',
-      'image',
-      'tags',
-      'isPrivate',
-      'makePublicOn',
-    ];
-    sanitizeObject(newUpdateData, ['html', 'markdown']);
+
+    const editableAttributes = ['TierId', 'title', 'html', 'tags', 'isPrivate', 'makePublicOn'];
+
     return await this.update({
       ...pick(newUpdateData, editableAttributes),
       LastEditedByUserId: remoteUser.id,
@@ -266,7 +277,6 @@ export default function (Sequelize, DataTypes) {
 
   // Publish update
   Update.prototype.publish = async function (remoteUser, notificationAudience) {
-    mustHaveRole(remoteUser, 'ADMIN', this.CollectiveId, 'publish this update');
     this.publishedAt = new Date();
     this.notificationAudience = notificationAudience;
     this.collective = this.collective || (await models.Collective.findByPk(this.CollectiveId));
@@ -288,19 +298,57 @@ export default function (Sequelize, DataTypes) {
 
   // Unpublish update
   Update.prototype.unpublish = async function (remoteUser) {
-    mustHaveRole(remoteUser, 'ADMIN', this.CollectiveId, 'unpublish this update');
-    this.publishedAt = null;
-    return await this.save();
+    return this.update({ LastEditedByUserId: remoteUser.id, publishedAt: null });
   };
 
   Update.prototype.delete = async function (remoteUser) {
-    mustHaveRole(remoteUser, 'ADMIN', this.CollectiveId, 'delete this update');
-    return this.destroy();
+    await models.Comment.destroy({ where: { UpdateId: this.id } });
+    await models.Update.update(
+      { deletedAt: new Date(), LastEditedByUserId: remoteUser.id },
+      { where: { id: this.id } },
+    );
+
+    return this;
   };
 
   // Returns the User model of the User that created this Update
   Update.prototype.getUser = function () {
     return models.User.findByPk(this.CreatedByUserId);
+  };
+
+  /**
+   * Get the member users to notify for an update.
+   */
+  Update.prototype.getUsersToNotify = async function () {
+    // Conditions for members of the collective
+    const targetRoles = this.isPrivate ? PRIVATE_UPDATE_TARGET_ROLES : PUBLIC_UPDATE_TARGET_ROLES;
+    const collective = this.collective || (await this.getCollective());
+    const collectiveConditions = { CollectiveId: collective.id, role: { [Op.in]: targetRoles } };
+
+    // Retrieve all direct members + ADMINs of the parent collective (if any)
+    let where = collectiveConditions;
+    if (collective.ParentCollectiveId) {
+      const parentCollectiveConditions = { CollectiveId: collective.ParentCollectiveId, role: 'ADMIN' };
+      where = { [Op.or]: [parentCollectiveConditions, collectiveConditions] };
+    }
+    const memberships = await models.Member.findAll({
+      where,
+      include: [{ model: models.Collective, as: 'memberCollective', required: true }],
+    });
+
+    // Get users from the memberships
+    // TODO: The code below was copied from `collective.getUsers()` and has a huge N+1 factor, we should optimize it.
+    const memberCollectives = memberships.map(membership => membership.memberCollective);
+    const users = await Promise.map(memberCollectives, memberCollective => {
+      if (memberCollective.type === CollectiveType.USER) {
+        return memberCollective.getUser().then(user => [user]);
+      } else {
+        return memberCollective.getAdminUsers();
+      }
+    });
+
+    const usersFlattened = flattenArray(users).filter(Boolean);
+    return uniqBy(usersFlattened, 'id');
   };
 
   /*
@@ -326,14 +374,15 @@ export default function (Sequelize, DataTypes) {
     };
 
     // fetch any matching slugs or slugs for the top choice in the list above
-    return Sequelize.query(
-      `
+    return sequelize
+      .query(
+        `
         SELECT slug FROM "Updates" WHERE "CollectiveId"=${this.CollectiveId} AND slug like '${suggestion}%'
       `,
-      {
-        type: Sequelize.QueryTypes.SELECT,
-      },
-    )
+        {
+          type: QueryTypes.SELECT,
+        },
+      )
       .then(updateObjectList => updateObjectList.map(update => update.slug))
       .then(slugList => slugSuggestionHelper(suggestion, slugList, 0))
       .then(slug => {
@@ -367,21 +416,6 @@ export default function (Sequelize, DataTypes) {
     );
   };
 
-  Update.findBySlug = (slug, options = {}) => {
-    if (!slug || slug.length < 1) {
-      return Promise.resolve(null);
-    }
-    return Update.findOne({
-      where: { slug: slug.toLowerCase() },
-      ...options,
-    }).then(Update => {
-      if (!Update) {
-        throw new Error(`No update found with slug ${slug}`);
-      }
-      return Update;
-    });
-  };
-
   Update.associate = m => {
     Update.belongsTo(m.Collective, {
       foreignKey: 'CollectiveId',
@@ -395,7 +429,13 @@ export default function (Sequelize, DataTypes) {
     Update.belongsTo(m.User, { foreignKey: 'LastEditedByUserId', as: 'user' });
   };
 
-  Temporal(Update, Sequelize);
+  Temporal(Update, sequelize);
 
   return Update;
 }
+
+// We're using the defineModel method to keep the indentation and have a clearer git history.
+// Please consider this if you plan to refactor.
+const Update = defineModel();
+
+export default Update;

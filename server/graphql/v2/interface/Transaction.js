@@ -8,6 +8,7 @@ import {
 } from 'graphql';
 import { GraphQLDateTime } from 'graphql-iso-date';
 
+import orderStatus from '../../../constants/order_status';
 import models from '../../../models';
 import * as TransactionLib from '../../common/transactions';
 import { TransactionType } from '../enum/TransactionType';
@@ -22,7 +23,7 @@ import { Account } from './Account';
 const TransactionPermissions = new GraphQLObjectType({
   name: 'TransactionPermissions',
   description: 'Fields for the user permissions on an transaction',
-  fields: {
+  fields: () => ({
     canRefund: {
       type: new GraphQLNonNull(GraphQLBoolean),
       description: 'Whether the current user can edit the transaction',
@@ -33,7 +34,12 @@ const TransactionPermissions = new GraphQLObjectType({
       description: "Whether the current user can download this transaction's invoice",
       resolve: TransactionLib.canDownloadInvoice,
     },
-  },
+    canReject: {
+      type: new GraphQLNonNull(GraphQLBoolean),
+      description: 'Whether the current user can reject the transaction',
+      resolve: TransactionLib.canReject,
+    },
+  }),
 });
 
 export const Transaction = new GraphQLInterfaceType({
@@ -59,7 +65,13 @@ export const Transaction = new GraphQLInterfaceType({
       amount: {
         type: new GraphQLNonNull(Amount),
       },
+      amountInHostCurrency: {
+        type: new GraphQLNonNull(Amount),
+      },
       netAmount: {
+        type: new GraphQLNonNull(Amount),
+      },
+      taxAmount: {
         type: new GraphQLNonNull(Amount),
       },
       platformFee: {
@@ -107,6 +119,12 @@ export const Transaction = new GraphQLInterfaceType({
       permissions: {
         type: TransactionPermissions,
       },
+      isOrderRejected: {
+        type: new GraphQLNonNull(GraphQLBoolean),
+      },
+      refundTransaction: {
+        type: Transaction,
+      },
     };
   },
 });
@@ -146,11 +164,26 @@ export const TransactionFields = () => {
         return { value: transaction.amount, currency: transaction.currency };
       },
     },
+    amountInHostCurrency: {
+      type: new GraphQLNonNull(Amount),
+      resolve(transaction) {
+        return { value: transaction.amountInHostCurrency, currency: transaction.hostCurrency };
+      },
+    },
     netAmount: {
       type: new GraphQLNonNull(Amount),
       resolve(transaction) {
         return {
           value: transaction.netAmountInCollectiveCurrency,
+          currency: transaction.currency,
+        };
+      },
+    },
+    taxAmount: {
+      type: new GraphQLNonNull(Amount),
+      resolve(transaction) {
+        return {
+          value: Math.abs(transaction.taxAmount),
           currency: transaction.currency,
         };
       },
@@ -245,11 +278,28 @@ export const TransactionFields = () => {
     },
     giftCardEmitterAccount: {
       type: Account,
-      description: '',
+      description: 'Account that emitted the gift card used for this transaction (if any)',
       async resolve(transaction, _, req) {
-        return transaction.UsingVirtualCardFromCollectiveId
-          ? await req.loaders.Collective.byId.load(transaction.UsingVirtualCardFromCollectiveId)
+        return transaction.UsingGiftCardFromCollectiveId
+          ? await req.loaders.Collective.byId.load(transaction.UsingGiftCardFromCollectiveId)
           : null;
+      },
+    },
+    isOrderRejected: {
+      type: new GraphQLNonNull(GraphQLBoolean),
+      async resolve(transaction, _, req) {
+        if (transaction.OrderId) {
+          const order = await req.loaders.Order.byId.load(transaction.OrderId);
+          return order.status === orderStatus.REJECTED;
+        } else {
+          return false;
+        }
+      },
+    },
+    refundTransaction: {
+      type: Transaction,
+      resolve(transaction) {
+        return transaction.getRefundTransaction();
       },
     },
   };

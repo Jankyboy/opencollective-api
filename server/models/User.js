@@ -4,23 +4,21 @@ import config from 'config';
 import debugLib from 'debug';
 import slugify from 'limax';
 import { defaults, get, intersection, pick } from 'lodash';
-import { Op } from 'sequelize';
+import Temporal from 'sequelize-temporal';
 
 import roles from '../constants/roles';
 import * as auth from '../lib/auth';
 import emailLib from '../lib/email';
 import logger from '../lib/logger';
+import sequelize, { DataTypes, Op } from '../lib/sequelize';
 import { isValidEmail } from '../lib/utils';
 
 const debug = debugLib('models:User');
 
-/**
- * Model.
- */
-export default (Sequelize, DataTypes) => {
-  const { models } = Sequelize;
+function defineModel() {
+  const { models } = sequelize;
 
-  const User = Sequelize.define(
+  const User = sequelize.define(
     'User',
     {
       firstName: DataTypes.STRING,
@@ -69,12 +67,18 @@ export default (Sequelize, DataTypes) => {
 
       createdAt: {
         type: DataTypes.DATE,
-        defaultValue: Sequelize.NOW,
+        defaultValue: DataTypes.NOW,
       },
 
       updatedAt: {
         type: DataTypes.DATE,
-        defaultValue: Sequelize.NOW,
+        defaultValue: DataTypes.NOW,
+      },
+
+      confirmedAt: {
+        type: DataTypes.DATE,
+        defaultValue: DataTypes.NOW,
+        allowNull: true,
       },
 
       lastLoginAt: {
@@ -94,6 +98,11 @@ export default (Sequelize, DataTypes) => {
 
       twoFactorAuthToken: {
         type: DataTypes.STRING,
+        allowNull: true,
+      },
+
+      twoFactorAuthRecoveryCodes: {
+        type: DataTypes.ARRAY(DataTypes.STRING),
         allowNull: true,
       },
     },
@@ -332,7 +341,7 @@ export default (Sequelize, DataTypes) => {
   };
 
   User.prototype.isRoot = function () {
-    const result = this.hasRole([roles.ADMIN], 1);
+    const result = this.hasRole([roles.ADMIN], 1) || this.hasRole([roles.ADMIN], 8686);
     debug('isRoot?', result);
     return result;
   };
@@ -344,13 +353,19 @@ export default (Sequelize, DataTypes) => {
     return result;
   };
 
+  // Slightly better API than the former
+  User.prototype.isMemberOfCollective = function (collective) {
+    if (collective.type === 'EVENT' || collective.type === 'PROJECT') {
+      return this.isMember(collective.id) || this.isMember(collective.ParentCollectiveId);
+    } else {
+      return this.isMember(collective.id);
+    }
+  };
+
   // Determines whether a user can see updates for a collective based on their roles.
-  User.prototype.canSeeUpdates = function (CollectiveId) {
-    const result =
-      this.CollectiveId === CollectiveId ||
-      this.hasRole([roles.HOST, roles.ADMIN, roles.MEMBER, roles.CONTRIBUTOR, roles.BACKER], CollectiveId);
-    debug('userid:', this.id, 'canSeeUpdates', CollectiveId, '?', result);
-    return result;
+  User.prototype.canSeePrivateUpdatesForCollective = function (collective) {
+    const allowedRoles = [roles.HOST, roles.ADMIN, roles.MEMBER, roles.CONTRIBUTOR, roles.BACKER];
+    return this.hasRole(allowedRoles, collective.id) || this.hasRole(allowedRoles, collective.ParentCollectiveId);
   };
 
   User.prototype.getPersonalDetails = function (remoteUser) {
@@ -392,7 +407,7 @@ export default (Sequelize, DataTypes) => {
    * Limit the user account, preventing most actions on the platoform
    * @param spamReport: an optional spam report to attach to the account limitation. See `server/lib/spam.ts`.
    */
-  User.prototype.limitAcount = async function (spamReport = null) {
+  User.prototype.limitAccount = async function (spamReport = null) {
     const newData = { ...this.data, features: { ...get(this.data, 'features'), ALL: false } };
     if (spamReport) {
       newData.spamReports = [...get(this.data, 'spamReports', []), spamReport];
@@ -419,8 +434,8 @@ export default (Sequelize, DataTypes) => {
     );
   };
 
-  User.findByEmail = email => {
-    return User.findOne({ where: { email } });
+  User.findByEmail = (email, transaction) => {
+    return User.findOne({ where: { email } }, { transaction });
   };
 
   User.createUserWithCollective = async (userData, transaction) => {
@@ -489,5 +504,13 @@ export default (Sequelize, DataTypes) => {
     return { firstName, lastName };
   };
 
+  Temporal(User, sequelize);
+
   return User;
-};
+}
+
+// We're using the defineModel method to keep the indentation and have a clearer git history.
+// Please consider this if you plan to refactor.
+const User = defineModel();
+
+export default User;

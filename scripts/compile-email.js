@@ -130,10 +130,10 @@ data['github.signup'] = {
     slug: 'webpack',
   },
 };
-data['collective.created.the-social-change-agency'] = data['collective.approved.the-social-change-agency'] = {
+data['collective.created.the-social-change-nest'] = data['collective.approved.the-social-change-nest'] = {
   host: {
-    slug: 'the-social-change-agency',
-    name: 'The Social Change Agency',
+    slug: 'the-social-change-nest',
+    name: 'The Social Change Nest',
   },
   collective: {
     slug: 'coinbase',
@@ -484,6 +484,24 @@ data['user.monthlyreport'] = {
       contributorsCount: 0,
     },
   ],
+};
+data['collective.member.created'] = {
+  member: {
+    memberCollective: {
+      name: 'John Doe',
+    },
+    role: 'contributor',
+  },
+  collective: {
+    name: 'TheCollective',
+  },
+  order: {
+    currency: 'USD',
+    totalAmount: 64 * 100,
+    subscription: {
+      interval: 'month',
+    },
+  },
 };
 
 const defaultData = {

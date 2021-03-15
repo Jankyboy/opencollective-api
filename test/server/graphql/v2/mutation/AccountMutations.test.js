@@ -17,12 +17,15 @@ const editSettingsMutation = gqlV2/* GraphQL */ `
 `;
 
 const addTwoFactorAuthTokenMutation = gqlV2/* GraphQL */ `
-  mutation AddTwoFactorAuthToAccount($account: AccountReferenceInput!, $token: String!) {
+  mutation AddTwoFactorAuthToIndividual($account: AccountReferenceInput!, $token: String!) {
     addTwoFactorAuthTokenToIndividual(account: $account, token: $token) {
-      id
-      ... on Individual {
-        hasTwoFactorAuth
+      account {
+        id
+        ... on Individual {
+          hasTwoFactorAuth
+        }
       }
+      recoveryCodes
     }
   }
 `;
@@ -146,6 +149,21 @@ describe('server/graphql/v2/mutation/AccountMutations', () => {
         collectivePage: { background: { zoom: 0.5, crop: { x: 0, y: 0 } } },
       });
     });
+
+    it('validates settings and refuses bad values for specific keys', async () => {
+      const result = await graphqlQueryV2(
+        editSettingsMutation,
+        {
+          account: { legacyId: collective.id },
+          key: 'moderation',
+          value: { rejectedCategories: ['ADULT', 'NOT_A_MODERATION_CATEGORY'] },
+        },
+        adminUser,
+      );
+
+      expect(result.errors).to.exist;
+      expect(result.errors[0].message).to.match(/Invalid filtering category/);
+    });
   });
 
   describe('addTwoFactorAuthTokenToIndividual', () => {
@@ -182,7 +200,8 @@ describe('server/graphql/v2/mutation/AccountMutations', () => {
         adminUser,
       );
       expect(result.errors).to.not.exist;
-      expect(result.data.addTwoFactorAuthTokenToIndividual.hasTwoFactorAuth).to.eq(true);
+      expect(result.data.addTwoFactorAuthTokenToIndividual.account.hasTwoFactorAuth).to.eq(true);
+      expect(result.data.addTwoFactorAuthTokenToIndividual.recoveryCodes).to.have.lengthOf(6);
     });
 
     it('fails if user already enabled 2FA', async () => {

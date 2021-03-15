@@ -1,4 +1,5 @@
 import { expect } from 'chai';
+import moment from 'moment';
 import { SequelizeValidationError } from 'sequelize';
 import sinon from 'sinon';
 
@@ -6,7 +7,7 @@ import { expenseStatus, roles } from '../../../server/constants';
 import plans from '../../../server/constants/plans';
 import { getFxRate } from '../../../server/lib/currency';
 import emailLib from '../../../server/lib/email';
-import models, { Op } from '../../../server/models';
+import models, { Op, sequelize } from '../../../server/models';
 import { PayoutMethodTypes } from '../../../server/models/PayoutMethod';
 import {
   fakeCollective,
@@ -133,76 +134,59 @@ describe('server/models/Collective', () => {
 
   before(() => utils.resetTestDB());
 
-  before(() =>
-    User.createUserWithCollective(users[0])
-      .tap(u => (user1 = u))
-      .then(() => User.createUserWithCollective(users[1]))
-      .tap(u => (user2 = u))
-      .then(() => User.createUserWithCollective(utils.data('host1')))
-      .tap(u => (hostUser = u))
-      .then(() => Collective.create(collectiveData))
-      .then(g => (collective = g))
-      .then(() =>
-        Collective.create({
-          slug: 'webpack',
-          tags: ['open source'],
-          isActive: true,
-        }),
-      )
-      .then(g => (opensourceCollective = g))
-      .then(() => collective.addUserWithRole(user1, 'BACKER'))
-      .then(() =>
-        models.Expense.create({
-          description: 'pizza',
-          amount: 1000,
-          currency: 'USD',
-          UserId: user1.id,
-          FromCollectiveId: user1.CollectiveId,
-          lastEditedById: user1.id,
-          incurredAt: transactions[0].createdAt,
-          createdAt: transactions[0].createdAt,
-          CollectiveId: collective.id,
-        }),
-      )
-      .then(() =>
-        models.Expense.create({
-          description: 'stickers',
-          amount: 15000,
-          currency: 'USD',
-          UserId: user1.id,
-          FromCollectiveId: user1.CollectiveId,
-          lastEditedById: user1.id,
-          incurredAt: transactions[1].createdAt,
-          createdAt: transactions[1].createdAt,
-          CollectiveId: collective.id,
-        }),
-      )
-      .then(() =>
-        models.Expense.create({
-          description: 'community gardening',
-          amount: 60100,
-          currency: 'USD',
-          UserId: user2.id,
-          FromCollectiveId: user2.CollectiveId,
-          lastEditedById: user2.id,
-          incurredAt: transactions[1].createdAt,
-          createdAt: transactions[1].createdAt,
-          CollectiveId: opensourceCollective.id,
-        }),
-      )
-      .then(() =>
-        Transaction.createManyDoubleEntry([transactions[2]], {
-          CollectiveId: opensourceCollective.id,
-          HostCollectiveId: hostUser.CollectiveId,
-        }),
-      )
-      .then(() =>
-        Transaction.createManyDoubleEntry(transactions, {
-          CollectiveId: collective.id,
-          HostCollectiveId: hostUser.CollectiveId,
-        }),
-      ),
-  );
+  before(async () => {
+    user1 = await User.createUserWithCollective(users[0]);
+    user2 = await User.createUserWithCollective(users[1]);
+    hostUser = await User.createUserWithCollective(utils.data('host1'));
+    collective = await Collective.create(collectiveData);
+    opensourceCollective = await Collective.create({
+      slug: 'webpack',
+      tags: ['open source'],
+      isActive: true,
+    });
+    await collective.addUserWithRole(user1, 'BACKER');
+    await models.Expense.create({
+      description: 'pizza',
+      amount: 1000,
+      currency: 'USD',
+      UserId: user1.id,
+      FromCollectiveId: user1.CollectiveId,
+      lastEditedById: user1.id,
+      incurredAt: transactions[0].createdAt,
+      createdAt: transactions[0].createdAt,
+      CollectiveId: collective.id,
+    });
+    await models.Expense.create({
+      description: 'stickers',
+      amount: 15000,
+      currency: 'USD',
+      UserId: user1.id,
+      FromCollectiveId: user1.CollectiveId,
+      lastEditedById: user1.id,
+      incurredAt: transactions[1].createdAt,
+      createdAt: transactions[1].createdAt,
+      CollectiveId: collective.id,
+    });
+    await models.Expense.create({
+      description: 'community gardening',
+      amount: 60100,
+      currency: 'USD',
+      UserId: user2.id,
+      FromCollectiveId: user2.CollectiveId,
+      lastEditedById: user2.id,
+      incurredAt: transactions[1].createdAt,
+      createdAt: transactions[1].createdAt,
+      CollectiveId: opensourceCollective.id,
+    });
+    await Transaction.createManyDoubleEntry([transactions[2]], {
+      CollectiveId: opensourceCollective.id,
+      HostCollectiveId: hostUser.CollectiveId,
+    });
+    await Transaction.createManyDoubleEntry(transactions, {
+      CollectiveId: collective.id,
+      HostCollectiveId: hostUser.CollectiveId,
+    });
+  });
 
   it('validates name', async () => {
     // Invalid
@@ -220,36 +204,30 @@ describe('server/models/Collective', () => {
     expect(collective.name).to.eq('Frank Zappa');
   });
 
-  it('creates a unique slug', () => {
-    return Collective.create({ slug: 'piamancini' })
-      .tap(collective => {
-        expect(collective.slug).to.equal('piamancini');
-      })
-      .then(() => Collective.create({ name: 'XavierDamman' }))
-      .then(collective => {
-        expect(collective.slug).to.equal('xavierdamman');
-      })
-      .then(() => Collective.create({ name: 'piamancini2' }))
-      .then(() => Collective.create({ twitterHandle: '@piamancini' }))
-      .then(collective => {
-        expect(collective.slug).to.equal('piamancini1');
-        expect(collective.twitterHandle).to.equal('piamancini');
-      })
-      .then(() => Collective.create({ name: 'XavierDamman' }))
-      .then(collective => {
-        expect(collective.slug).to.equal('xavierdamman1');
-      })
-      .then(() => Collective.create({ name: 'hélène & les g.arçons' }))
-      .then(collective => {
-        expect(collective.slug).to.equal('helene-and-les-g-arcons');
-      });
+  it('creates a unique slug', async () => {
+    const collective1 = await Collective.create({ slug: 'piamancini' });
+    expect(collective1.slug).to.equal('piamancini');
+
+    const collective2 = await Collective.create({ name: 'XavierDamman' });
+    expect(collective2.slug).to.equal('xavierdamman');
+
+    await Collective.create({ name: 'piamancini2' });
+
+    const collective3 = await Collective.create({ twitterHandle: '@piamancini' });
+    expect(collective3.slug).to.equal('piamancini1');
+    expect(collective3.twitterHandle).to.equal('piamancini');
+
+    const collective4 = await Collective.create({ name: 'XavierDamman' });
+    expect(collective4.slug).to.equal('xavierdamman1');
+
+    const collective5 = await Collective.create({ name: 'hélène & les g.arçons' });
+    expect(collective5.slug).to.equal('helene-and-les-g-arcons');
   });
 
-  it('creates a unique slug for incognito profile', () => {
-    return Collective.create({ isIncognito: true }).tap(collective => {
-      expect(collective.slug).to.contain('incognito-');
-      expect(collective.slug.length).to.equal(18);
-    });
+  it('creates a unique slug for incognito profile', async () => {
+    const collective = await Collective.create({ isIncognito: true });
+    expect(collective.slug).to.contain('incognito-');
+    expect(collective.slug.length).to.equal(18);
   });
 
   it('frees up current slug when deleted', async () => {
@@ -259,32 +237,6 @@ describe('server/models/Collective', () => {
 
     expect(slug).to.not.be.equal(collective.slug);
     expect(/-\d+$/.test(collective.slug)).to.be.true;
-  });
-
-  it('prevents collective creation and limit user if spam is detected', async () => {
-    const user = await fakeUser();
-    const spamCollectiveData = {
-      name: 'BUY MY KETO',
-      website: 'https://supplementslove.com/buy-stuff',
-      CreatedByUserId: user.id,
-    };
-
-    // Should prevent collective creation
-    await expect(models.Collective.create(spamCollectiveData)).to.be.eventually.rejectedWith(
-      Error,
-      'Collective creation failed',
-    );
-
-    // Should limit user account
-    await user.reload();
-    expect(user.data.features.ALL).to.be.false;
-
-    // User should not be able to create any new collectives
-    const legitCollectiveData = { name: 'Legit project', CreatedByUserId: user.id };
-    await expect(models.Collective.create(legitCollectiveData)).to.be.eventually.rejectedWith(
-      Error,
-      "You're not authorized to create new collectives at the moment.",
-    );
   });
 
   it('does not create collective with a blocked slug', () => {
@@ -458,6 +410,7 @@ describe('server/models/Collective', () => {
       const plan = await hostUser.collective.getPlan();
 
       expect(plan).to.deep.equal({
+        id: 3,
         name: 'default',
         hostedCollectives: 2,
         addedFunds: 0,
@@ -512,7 +465,7 @@ describe('server/models/Collective', () => {
 
   it('computes the balance until a certain month', done => {
     const until = new Date('2016-07-01');
-    collective.getBalance(until).then(balance => {
+    collective.getBalance({ endDate: until }).then(balance => {
       let sum = 0;
       transactions.map(t => {
         if (t.createdAt < until) {
@@ -551,7 +504,7 @@ describe('server/models/Collective', () => {
       data: { payout_batch_id: 1 },
     });
 
-    const balance = await collective.getBalance();
+    const balance = await collective.getBalanceWithBlockedFunds();
     expect(balance).to.equal(45000 - 30000);
   });
 
@@ -819,6 +772,11 @@ describe('server/models/Collective', () => {
         });
       };
 
+      // Remove all existing members to stash from fresh
+      await models.Member.destroy({
+        where: { CollectiveId: collective.id, role: { [Op.in]: [roles.ADMIN, roles.MEMBER] } },
+      });
+
       let members = await collective.editMembers(
         [
           {
@@ -907,13 +865,12 @@ describe('server/models/Collective', () => {
   });
 
   describe('third party accounts handles', () => {
-    it('stores Github handle and strip first @ character', () => {
-      return Collective.create({
+    it('stores Github handle and strip first @ character', async () => {
+      const collective = await Collective.create({
         slug: 'my-collective',
         githubHandle: '@test',
-      }).tap(collective => {
-        expect(collective.githubHandle).to.equal('test');
       });
+      expect(collective.githubHandle).to.equal('test');
     });
   });
 
@@ -985,7 +942,7 @@ describe('server/models/Collective', () => {
       collective = await fakeCollective({ isHostAccount: true });
       paymentMethod = await fakePaymentMethod({
         service: 'opencollective',
-        type: 'collective',
+        type: 'host',
         data: {},
         CollectiveId: collective.id,
       });
@@ -1075,6 +1032,115 @@ describe('server/models/Collective', () => {
       const fx = await getFxRate('EUR', 'USD');
       const totalAddedFunds = await collective.getTotalTransferwisePayouts();
       expect(totalAddedFunds).to.equals(100000 + 50000 * fx);
+    });
+  });
+
+  describe('getHostMetrics()', () => {
+    const lastMonth = moment.utc().subtract(1, 'month');
+
+    after(async () => {
+      await utils.resetTestDB();
+    });
+
+    let gbpHost, socialCollective, metrics;
+    before(async () => {
+      await utils.resetTestDB();
+      const user = await fakeUser({ id: 30 }, { id: 20, slug: 'pia' });
+      const opencollective = await fakeHost({ id: 8686, slug: 'opencollective', CreatedByUserId: user.id });
+      // Move Collectives ID auto increment pointer up, so we don't collide with the manually created id:1
+      await sequelize.query(`ALTER SEQUENCE "Collectives_id_seq" RESTART WITH 1453`);
+      await fakePayoutMethod({
+        id: 2955,
+        CollectiveId: opencollective.id,
+        type: 'BANK_ACCOUNT',
+      });
+
+      gbpHost = await fakeHost({ currency: 'GBP' });
+
+      const stripePaymentMethod = await fakePaymentMethod({ service: 'stripe', token: 'tok_bypassPending' });
+
+      socialCollective = await fakeCollective({ HostCollectiveId: gbpHost.id });
+      const transactionProps = {
+        amount: 100,
+        type: 'CREDIT',
+        CollectiveId: socialCollective.id,
+        currency: 'GBP',
+        hostCurrency: 'GBP',
+        HostCollectiveId: gbpHost.id,
+        createdAt: lastMonth,
+      };
+      // Create Platform Fees
+      await fakeTransaction({
+        ...transactionProps,
+        amount: 3000,
+        platformFeeInHostCurrency: -300,
+        hostFeeInHostCurrency: -300,
+        netAmountInCollectiveCurrency: 3000 - 300 - 300,
+      });
+      await fakeTransaction({
+        ...transactionProps,
+        amount: 5000,
+        platformFeeInHostCurrency: -500,
+        hostFeeInHostCurrency: -500,
+        PaymentMethodId: stripePaymentMethod.id,
+        netAmountInCollectiveCurrency: 5000 - 500 - 500,
+      });
+      // Add Platform Tips
+      const t = await fakeTransaction(transactionProps);
+      await fakeTransaction({
+        type: 'CREDIT',
+        CollectiveId: opencollective.id,
+        HostCollectiveId: opencollective.id,
+        amount: 100,
+        currency: 'USD',
+        data: { hostToPlatformFxRate: 1.23 },
+        PlatformTipForTransactionGroup: t.TransactionGroup,
+        createdAt: lastMonth,
+      });
+      await fakeTransaction({
+        type: 'CREDIT',
+        CollectiveId: opencollective.id,
+        HostCollectiveId: opencollective.id,
+        amount: 300,
+        currency: 'USD',
+        data: { hostToPlatformFxRate: 1.2 },
+        PlatformTipForTransactionGroup: t.TransactionGroup,
+        createdAt: lastMonth,
+        PaymentMethodId: stripePaymentMethod.id,
+      });
+      // Different Currency Transaction
+      const otherCollective = await fakeCollective({ currency: 'USD', HostCollectiveId: gbpHost.id });
+      await fakeTransaction({
+        type: 'CREDIT',
+        CollectiveId: otherCollective.id,
+        amount: 1000,
+        currency: 'USD',
+        hostCurrency: 'GBP',
+        HostCollectiveId: gbpHost.id,
+        hostCurrencyFxRate: 0.8,
+        createdAt: lastMonth,
+      });
+
+      metrics = await gbpHost.getHostMetrics(lastMonth);
+    });
+
+    it('returns acurate metrics for requested month', async () => {
+      // We expect the value returned by getFxRate (fixer API), which is 1.1 in test environment
+      const usdToGbpFxRate = 1.1;
+
+      const expectedTotalMoneyManaged = 2400 + 4000 + 100 + 1000 * usdToGbpFxRate;
+
+      expect(metrics).to.deep.equal({
+        hostFees: 800,
+        platformFees: 800,
+        pendingPlatformFees: 300,
+        platformTips: 331,
+        pendingPlatformTips: 81,
+        hostFeeShare: 0,
+        pendingHostFeeShare: 0,
+        hostFeeSharePercent: 0,
+        totalMoneyManaged: expectedTotalMoneyManaged,
+      });
     });
   });
 });
