@@ -47,7 +47,7 @@
     "express-basic-auth": "1.2.0",
     "express-limiter": "1.6.1",
     "express-session": "1.17.1",
-    "express-ws": "4.0.0",
+    "express-ws": "5.0.1",
     "forest-express-sequelize": "6.3.11",
     "fs-extra": "9.0.1",
     "graphql": "15.3.0",
